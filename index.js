@@ -20,7 +20,12 @@ const useClaude = Boolean(claudeApiKey);
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function sendJson(res, status, data) {
-  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.writeHead(status, { 
+    'Content-Type': 'application/json',
+    'Access-Control-Allow-Origin': '*', // In production, replace '*' with your specific FE URL
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS, PUT, DELETE',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+  });
   res.end(JSON.stringify(data));
 }
 
@@ -467,6 +472,17 @@ const routes = [
 ];
 
 function router(req, res) {
+  // Handle CORS preflight requests
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS, PUT, DELETE',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+    });
+    res.end();
+    return;
+  }
+
   const route = routes.find(({ match }) => match(req.url, req.method));
   const handler = route ? route.handler : handleNotFound;
 
