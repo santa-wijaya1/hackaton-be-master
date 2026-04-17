@@ -1,24 +1,28 @@
-import Anthropic from "@anthropic-ai/sdk";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { Op } from "sequelize";
 import { Brand } from "./models/index.js";
 import { searchImages } from "./services/shutterstock.js";
 
-const claudeApiKey = process.env.CLAUDE_API_KEY;
-const claudeModel = process.env.CLAUDE_MODEL || "claude-opus-4-6";
-const useClaude = Boolean(claudeApiKey);
-const anthropic = useClaude ? new Anthropic({ apiKey: claudeApiKey }) : null;
+const geminiApiKey = process.env.GEMINI_API_KEY;
+const geminiModel = process.env.GEMINI_MODEL || "gemini-1.5-flash";
+const useGemini = Boolean(geminiApiKey);
 
-function getClient() {
-  if (!anthropic) {
+const genAI = useGemini ? new GoogleGenerativeAI(geminiApiKey) : null;
+
+function getModel(systemInstruction) {
+  if (!genAI) {
     throw new Error(
-      "Anthropic client is not initialised. Set CLAUDE_API_KEY or ANTHROPIC_API_KEY."
+      "Gemini client is not initialised. Set GEMINI_API_KEY in .env"
     );
   }
-  return anthropic;
+  return genAI.getGenerativeModel({
+    model: geminiModel,
+    systemInstruction,
+  });
 }
 
 export async function generateClaudeHtml(prompt) {
-  const anthropicInstruction = `You are an HTML content generator. When creating content with images, always use valid image URLs from free stock photo services like:
+  const systemInstruction = `You are an HTML content generator. When creating content with images, always use valid image URLs from free stock photo services like:
 - https://via.placeholder.com/600x400 (for placeholders)
 - https://source.unsplash.com/600x400?random (for random images)
 - https://picsum.photos/600/400 (for random images)
@@ -27,27 +31,18 @@ For every image tag, provide a complete img element with src and alt attributes.
 
 Generate only the HTML content for the main section of the page, such as paragraphs, images, lists, headings, etc. Do not include <html>, <head>, <body>, <header>, or <footer> tags. Output only valid HTML fragments.`;
 
-  const response = await anthropic.messages.create({
-    model: claudeModel,
-    max_tokens: 1000,
-    system: anthropicInstruction,
-    messages: [
-      { role: "user", content: "Generate HTML content for a page based on this prompt: " + prompt }
-    ],
-  });
-
-  return response.content[0].text;
+  const model = getModel(systemInstruction);
+  const result = await model.generateContent("Generate HTML content for a page based on this prompt: " + prompt);
+  const response = await result.response;
+  return response.text();
 }
 
 export async function analyzeBrand(sourceUrl, file = null) {
-  // file: { data: Buffer, mimeType: string } - image or PDF
-
   // Ensure URL has a protocol
   if (sourceUrl && !/^https?:\/\//i.test(sourceUrl)) {
     sourceUrl = "https://" + sourceUrl;
   }
 
-  // Capture screenshot + meta via Puppeteer when a URL is given and no file uploaded
   let pageMeta = null;
   if (sourceUrl && !file) {
     try {
@@ -171,42 +166,25 @@ GOAL
 ========================
 Return a clean, usable brand persona for travel-focused UI personalization and marketing`;
 
-  // Build message content - screenshot/file block first, then prompt
-  const userContent = [];
-
+  const model = getModel("You are a Brand Intelligence AI that returns only valid JSON.");
+  
+  const contentParts = [];
   if (file) {
-    const base64Data = file.data.toString("base64");
-    if (file.mimeType === "application/pdf") {
-      userContent.push({
-        type: "document",
-        source: { type: "base64", media_type: "application/pdf", data: base64Data },
-      });
-    } else {
-      // image/*
-      userContent.push({
-        type: "image",
-        source: { type: "base64", media_type: file.mimeType, data: base64Data },
-      });
-    }
+    contentParts.push({
+      inlineData: {
+        data: file.data.toString("base64"),
+        mimeType: file.mimeType,
+      },
+    });
   }
+  contentParts.push({ text: prompt });
 
-  userContent.push({ type: "text", text: prompt });
-
-  const msg = await getClient().messages.create({
-    model: claudeModel,
-    max_tokens: 20000,
-    temperature: 1,
-    system: "You are a Brand Intelligence AI that returns only valid JSON.",
-    messages: [{ role: "user", content: userContent }],
+  const result = await model.generateContent({
+    contents: [{ role: "user", parts: contentParts }],
   });
-
-  const textBlock = msg.content.find((b) => b.type === "text");
-  if (!textBlock) {
-    throw new Error("No text content in brand analysis response");
-  }
-
-  const rawJson = textBlock.text.replace(/```json|```/g, "").trim();
-
+  
+  const response = await result.response;
+  const rawJson = response.text().replace(/```json|```/g, "").trim();
   const brandData = JSON.parse(rawJson);
 
   // Build structured color palette from colors array
@@ -225,8 +203,6 @@ Return a clean, usable brand persona for travel-focused UI personalization and m
     .replace(/\s+/g, "-")
     .replace(/-+/g, "-");
 
-  // Match by URL or slug — prevents duplicate slug when same domain is submitted
-  // with different URL formats (http vs https, www vs non-www, trailing slash, etc.)
   const whereClause = sourceUrl
     ? { [Op.or]: [{ url: sourceUrl }, { slug }] }
     : { slug };
@@ -268,10 +244,6 @@ export async function generateBannerContent(brandData, brief) {
 
   const toneStr = (brandData.tone || []).join(", ") || "professional";
   const aestheticsStr = (brandData.aesthetics || []).join(", ") || "modern";
-  const briefInstruction = briefText
-    ? "- Prioritize the campaign brief direction when shaping tone, message, and imagery\n"
-    : "";
-
   const destinationsStr = (brandData.target && brandData.target.destinations_focus || []).join(", ");
   const countriesStr = (brandData.target && brandData.target.countries || []).join(", ");
 
@@ -305,32 +277,17 @@ OUTPUT (STRICT JSON)
 ========================
 INSTRUCTIONS
 ========================
-- header: Short, aspirational travel statement (max 8 words) — evoke wanderlust, adventure, discovery, or escape. Use action words like "Explore", "Discover", "Escape to", "Journey to", "Experience"
-- sub_header: Reinforces the header with a destination-specific or experience-driven line (max 20 words) — mention specific destinations (${destinationsStr || "global destinations"}), journeys, or unique experiences the brand enables
-- image_query: Shutterstock search phrase — follow these rules:
-  * If the banner theme involves a specific character name (cartoon, anime, fictional character), artist name, celebrity, movie title, TV show, or game title: use that name as the primary keyword followed by 1-2 descriptive words (e.g. "Spider-Man action pose", "Mickey Mouse cheerful")
-  * Otherwise: use destination or travel scene keywords aligned with the brand's target regions (${destinationsStr || countriesStr || "travel landscape"}) and tone (${toneStr}) — e.g. "Bali rice terraces aerial sunrise", "Santorini cliffside sunset luxury", "Tokyo street night neon travel"
-- Each of the 3 banners must have a distinctly different angle: e.g. one adventure-focused, one luxury-focused, one cultural/local-focused
-- Match the brand's tone (${toneStr}) and aesthetics (${aestheticsStr})
-${briefInstruction}- Always return valid JSON only`;
+- header: Short, aspirational travel statement (max 8 words)
+- sub_header: Reinforces the header with a destination-specific or experience-driven line (max 20 words)
+- image_query: Shutterstock search phrase
+- Always return valid JSON only`;
 
-  const msg = await getClient().messages.create({
-    model: claudeModel,
-    max_tokens: 1024,
-    temperature: 1,
-    system: "You are a marketing copywriter that returns only valid JSON.",
-    messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
-  });
-
-  const textBlock = msg.content.find((b) => b.type === "text");
-  if (!textBlock) {
-    throw new Error("No text content in banner generation response");
-  }
-
-  const rawJson = textBlock.text.replace(/```json|```/g, "").trim();
+  const model = getModel("You are a marketing copywriter that returns only valid JSON.");
+  const result = await model.generateContent(prompt);
+  const response = await result.response;
+  const rawJson = response.text().replace(/```json|```/g, "").trim();
   const parsed = JSON.parse(rawJson);
 
-  // Fetch images for each banner
   const bannersWithImages = await Promise.all(
     parsed.banners.map(async (banner) => {
       const images = await searchImages(banner.image_query);
@@ -343,17 +300,9 @@ ${briefInstruction}- Always return valid JSON only`;
     })
   );
 
-  return {
-    banners: bannersWithImages,
-  };
+  return { banners: bannersWithImages };
 }
 
-/**
- * Interprets a free-text brief and applies updates to banner and/or color_palette.
- * Claude decides what changed; only affected fields are returned.
- *
- * Returns { banner?, color_palette? }
- */
 export async function updateBrandFromBrief(rawData, brief) {
   const currentBanner = rawData.banner || {};
   const currentPalette = rawData.color_palette || {};
@@ -406,33 +355,18 @@ OUTPUT (STRICT JSON)
 ========================
 INSTRUCTIONS
 ========================
-- Read the brief and detect intent: banner copy change, banner image change, color change, or any combination
-- update_banner: true if the brief asks to change header, sub-header, or banner image/visual
-- banner.header / banner.sub_header: new values if changed, otherwise repeat current values
-- banner.update_image: true only if brief mentions visuals, image, background, scene, photo, or new mood
-- banner.image_query: 3-6 Shutterstock keyword phrase only when update_image is true
-- update_colors: true if the brief mentions button color, primary color, brand color, or any hex code or color name
-- color_palette: only include primary/secondary/tertiary that are explicitly changed; use empty string "" for unchanged ones
 - Always return valid JSON only`;
 
-  const msg = await getClient().messages.create({
-    model: claudeModel,
-    max_tokens: 512,
-    temperature: 1,
-    system: "You are a brand assistant that returns only valid JSON.",
-    messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
-  });
+  const model = getModel("You are a brand assistant that returns only valid JSON.");
+  const result = await model.generateContent(prompt);
+  const response = await result.response;
+  const parsed = JSON.parse(response.text().replace(/```json|```/g, "").trim());
+  
+  const resultData = {};
 
-  const textBlock = msg.content.find((b) => b.type === "text");
-  if (!textBlock) throw new Error("No text content in brand update response");
-
-  const parsed = JSON.parse(textBlock.text.replace(/```json|```/g, "").trim());
-  const result = {};
-
-  // ── Banner ──────────────────────────────────────────────────────────────
   if (parsed.update_banner) {
     const b = parsed.banner || {};
-    result.banner = {
+    resultData.banner = {
       header:     b.header     || currentBanner.header     || null,
       sub_header: b.sub_header || currentBanner.sub_header || null,
       image:      currentBanner.image || null,
@@ -440,15 +374,14 @@ INSTRUCTIONS
 
     if (b.update_image && b.image_query) {
       const images = await searchImages(b.image_query);
-      result.banner.image_query = b.image_query;
-      result.banner.image = images[0] || null;
+      resultData.banner.image_query = b.image_query;
+      resultData.banner.image = images[0] || null;
     }
   }
 
-  // ── Color palette ────────────────────────────────────────────────────────
   if (parsed.update_colors) {
     const c = parsed.color_palette || {};
-    result.color_palette = {
+    resultData.color_palette = {
       primary:   c.primary   || currentPalette.primary   || null,
       secondary: c.secondary || currentPalette.secondary || null,
       tertiary:  c.tertiary  || currentPalette.tertiary  || null,
@@ -456,17 +389,11 @@ INSTRUCTIONS
     };
   }
 
-  return result;
+  return resultData;
 }
 
-/**
- * Analyses a brand's compatibility and partnership potential with Travlr.com.
- * Returns a structured JSON report with opportunity scoring, campaign ideas, etc.
- */
 export async function analyzeTravlrCompatibility(brandData) {
-  const prompt = `You are a travel industry partnership strategist at Travlr.com — a leading online travel agency (OTA) platform that sells flights, hotels, tours, experiences, and travel packages globally.
-
-Analyse the brand below and produce a detailed compatibility and opportunity report for a potential Travlr.com partnership.
+  const prompt = `Analyse the brand below and produce a detailed compatibility and opportunity report for a potential Travlr.com partnership.
 
 ========================
 BRAND DATA
@@ -515,55 +442,10 @@ OUTPUT (STRICT JSON)
 ========================
 INSTRUCTIONS
 ========================
-compatibility_score: integer 0-100 reflecting how well this brand aligns with Travlr.com's travel marketplace
-compatibility_label: one of "Ideal Partner", "Strong Fit", "Moderate Fit", "Niche Fit", "Low Fit"
-travel_relevance: one of "Core Travel", "Travel Adjacent", "Lifestyle & Travel", "Non-Travel with Travel Potential", "Non-Travel"
-summary: 2-3 sentence executive summary of the brand's partnership potential with Travlr.com
-
-strengths: list of reasons why this brand is a good fit (e.g. aligned audience, destination focus, brand values)
-challenges: list of friction points or risks in the partnership
-
-audience_overlap.score: integer 0-100
-audience_overlap.description: explain how the brand's audience maps to Travlr.com's travel bookers
-audience_overlap.shared_segments: list of traveler types both brands reach (e.g. "luxury travelers", "solo backpackers", "family holidaymakers")
-
-partnership_types: 2-4 partnership models (e.g. Co-branded campaign, Affiliate integration, Exclusive travel packages, Loyalty program tie-in, Sponsored content)
-  - type: short name
-  - description: how it would work
-  - potential: "High" | "Medium" | "Low"
-
-campaign_ideas: 3 specific, creative campaign concepts
-  - title: campaign name
-  - concept: what the campaign does
-  - format: channel/format (e.g. "Social media + email", "OOH + digital", "Influencer + landing page")
-  - target_audience: who it targets
-  - expected_outcome: measurable goal (e.g. "15% uplift in bookings", "brand awareness in SEA market")
-
-destination_opportunities: list of specific destinations or regions where the partnership makes most sense, based on the brand's target market
-
-revenue_models: list of monetisation approaches (e.g. "Commission on bookings", "Co-funded media spend", "White-label travel packages")
-
-quick_wins: 2-3 things that can be activated immediately
-long_term_plays: 2-3 strategic initiatives for 12+ months
-
-risk_factors: brand safety, audience mismatch, or market risks to be aware of
-
-recommendation: one clear action sentence — what Travlr.com should do next with this brand
-
-- Be specific to this brand — avoid generic statements
-- Ground campaign ideas in the brand's actual tone, aesthetics, and target audience
 - Always return valid JSON only`;
 
-  const msg = await getClient().messages.create({
-    model: claudeModel,
-    max_tokens: 4096,
-    temperature: 1,
-    system: "You are a travel industry partnership strategist that returns only valid JSON.",
-    messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
-  });
-
-  const textBlock = msg.content.find((b) => b.type === "text");
-  if (!textBlock) throw new Error("No text content in compatibility analysis response");
-
-  return JSON.parse(textBlock.text.replace(/```json|```/g, "").trim());
+  const model = getModel("You are a travel industry partnership strategist that returns only valid JSON.");
+  const result = await model.generateContent(prompt);
+  const response = await result.response;
+  return JSON.parse(response.text().replace(/```json|```/g, "").trim());
 }

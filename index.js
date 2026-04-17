@@ -14,8 +14,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = process.env.PORT || 3000;
-const claudeApiKey = process.env.CLAUDE_API_KEY;
-const useClaude = Boolean(claudeApiKey);
+const geminiApiKey = process.env.GEMINI_API_KEY;
+const useGemini = Boolean(geminiApiKey);
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -33,9 +33,9 @@ function sendError(res, status, message) {
   sendJson(res, status, { error: message });
 }
 
-function requireClaude(res) {
-  if (!useClaude) {
-    sendError(res, 503, 'Claude API key not configured');
+function requireGemini(res) {
+  if (!useGemini) {
+    sendError(res, 503, 'Gemini API key not configured');
     return false;
   }
   return true;
@@ -75,7 +75,7 @@ function serveStatic(req, res) {
 // ── Route handlers ───────────────────────────────────────────────────────────
 
 async function handleGenerateContent(req, res) {
-  if (!requireClaude(res)) return;
+  if (!requireGemini(res)) return;
 
   const prompt = getQueryParams(req).get('prompt');
   if (!prompt) {
@@ -95,7 +95,7 @@ async function handleGenerateContent(req, res) {
 }
 
 async function handleAnalyzeBrand(req, res) {
-  if (!requireClaude(res)) return;
+  if (!requireGemini(res)) return;
 
   const contentType = req.headers['content-type'] || '';
 
@@ -158,7 +158,7 @@ async function handleAnalyzeBrand(req, res) {
 }
 
 async function handleAnalyzeBrandFull(req, res) {
-  if (!requireClaude(res)) return;
+  if (!requireGemini(res)) return;
 
   const contentType = req.headers['content-type'] || '';
 
@@ -226,7 +226,7 @@ async function handleAnalyzeBrandFull(req, res) {
 }
 
 async function handleCreateBanner(req, res) {
-  if (!requireClaude(res)) return;
+  if (!requireGemini(res)) return;
 
   const params = getQueryParams(req);
   const slug = params.get('slug');
@@ -424,7 +424,7 @@ async function handleUpdateRawData(req, res) {
 }
 
 async function handleTravlrCompatibility(req, res) {
-  if (!requireClaude(res)) return;
+  if (!requireGemini(res)) return;
 
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const param = url.pathname.split('/')[2];
@@ -500,7 +500,7 @@ await connectDB();
 
 server.listen(PORT, () => {
   console.log(`Server running at http://localhost:${PORT}/`);
-  console.log(`Claude enabled: ${useClaude}`);
+  console.log(`Gemini enabled: ${useGemini}`);
   console.log('');
   console.log('Routes:');
   console.log(`  GET /public/<file>                     — static assets`);

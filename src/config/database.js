@@ -10,7 +10,13 @@ export const sequelize = new Sequelize(
   {
     host: process.env.DB_HOST,
     port: process.env.DB_PORT,
-    dialect: "mysql",
+    dialect: "postgres",
+    dialectOptions: {
+      ssl: {
+        require: true,
+        rejectUnauthorized: false // Required for Supabase connections
+      }
+    },
     logging: false, // set true for debug
   }
 );
@@ -18,9 +24,9 @@ export const sequelize = new Sequelize(
 export async function connectDB() {
   try {
     await sequelize.authenticate();
-    console.log("MySQL connected");
+    console.log("Supabase (PostgreSQL) connected");
   } catch (error) {
-    console.error("DB connection failed:", error);
+    console.error("Supabase connection failed:", error);
     process.exit(1);
   }
 }
