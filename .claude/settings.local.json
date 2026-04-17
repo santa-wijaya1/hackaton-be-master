@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install:*)",
+      "Bash(node -e \"import\\('puppeteer'\\).then\\(m => console.log\\('puppeteer ok:', m.default.version ? m.default.version\\(\\) : 'loaded'\\)\\).catch\\(e => console.error\\(e.message\\)\\)\")",
+      "Bash(taskkill /F /IM node.exe)",
+      "Bash(PUPPETEER_SKIP_DOWNLOAD=true npm install puppeteer)",
+      "Bash(node -e \"import\\('./src/services/puppeteer.js'\\).then\\(m => m.captureWebsite\\('https://example.com'\\)\\).then\\(r => console.log\\('ok, screenshot size:', r.data.length, 'meta:', JSON.stringify\\(r.meta\\)\\)\\).catch\\(e => console.error\\('fail:', e.message\\)\\)\")",
+      "Bash(node -e ':*)"
+    ]
+  }
+}

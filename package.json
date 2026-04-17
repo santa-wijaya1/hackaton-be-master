@@ -1,0 +1,21 @@
+{
+    "name": "hackaton",
+    "version": "1.0.0",
+    "description": "A simple Node.js Hello World app",
+    "type": "module",
+    "main": "index.js",
+    "scripts": {
+        "start": "node index.js"
+    },
+    "dependencies": {
+        "@anthropic-ai/sdk": "^0.82.0",
+        "axios": "^1.14.0",
+        "busboy": "^1.6.0",
+        "dotenv": "^16.0.0",
+        "mysql2": "^3.20.0",
+        "puppeteer": "^24.40.0",
+        "sequelize": "^6.37.8"
+    },
+    "author": "",
+    "license": "ISC"
+}
